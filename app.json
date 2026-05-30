@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "YOUvolution",
+    "slug": "youvolution",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "youvolution",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.youvolution.app"
+    },
+    "android": {
+      "package": "com.youvolution.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#4F46E5",
+        "foregroundImage": "./assets/icon.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#4F46E5"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "YOUvolution uses your photos to log meals."
+        }
+      ]
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      }
+    }
+  }
+}
