@@ -7,10 +7,12 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { Colors, FontSizes, Spacing } from '../constants/colors';
 import { UserProfile, WeeklyPlan, MealLog } from '../types';
 import { supabase } from '../lib/supabase';
+import { appEvents, PLAN_UPDATED, MEAL_LOGGED } from '../lib/events';
 import { format, startOfWeek } from 'date-fns';
 
 interface Props {
@@ -54,7 +56,12 @@ export default function HomeScreen({ profile, onChatPress }: Props) {
     setLoadingPlan(false);
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    fetchData();
+    const unsubPlan = appEvents.on(PLAN_UPDATED, fetchData);
+    const unsubMeal = appEvents.on(MEAL_LOGGED, fetchData);
+    return () => { unsubPlan(); unsubMeal(); };
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -188,6 +195,22 @@ export default function HomeScreen({ profile, onChatPress }: Props) {
         </>
       )}
 
+      {/* Talk to a real coach */}
+      <Text style={styles.sectionTitle}>Need More Help?</Text>
+      <TouchableOpacity
+        style={styles.coachCard}
+        onPress={() => Linking.openURL('mailto:coach@youvolution.app?subject=Coaching%20Request&body=Hi%2C%20I%27d%20like%20to%20connect%20with%20a%20nutrition%20coach.')}
+      >
+        <View style={styles.coachCardLeft}>
+          <Text style={styles.coachAvatar}>👩‍⚕️</Text>
+        </View>
+        <View style={styles.coachCardContent}>
+          <Text style={styles.coachCardTitle}>Talk to a Real Coach</Text>
+          <Text style={styles.coachCardSub}>Connect with a human nutrition coach for personalized guidance beyond AI.</Text>
+          <Text style={styles.coachCardCta}>Send a message →</Text>
+        </View>
+      </TouchableOpacity>
+
       <View style={{ height: 40 }} />
     </ScrollView>
   );
@@ -258,4 +281,11 @@ const styles = StyleSheet.create({
   logRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border },
   logDesc: { flex: 1, fontSize: FontSizes.sm, color: Colors.text },
   logCal: { fontSize: FontSizes.sm, color: Colors.textMuted },
+  coachCard: { flexDirection: 'row', backgroundColor: Colors.surface, borderRadius: 16, padding: Spacing.md, marginBottom: Spacing.lg, borderWidth: 1.5, borderColor: Colors.border, gap: Spacing.md, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
+  coachCardLeft: { justifyContent: 'center' },
+  coachAvatar: { fontSize: 40 },
+  coachCardContent: { flex: 1 },
+  coachCardTitle: { fontSize: FontSizes.base, fontWeight: '700', color: Colors.text, marginBottom: 4 },
+  coachCardSub: { fontSize: FontSizes.sm, color: Colors.textSecondary, lineHeight: 18, marginBottom: 6 },
+  coachCardCta: { fontSize: FontSizes.sm, color: Colors.primary, fontWeight: '600' },
 });

@@ -22,7 +22,6 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-router",
       "expo-secure-store",
       [
         "expo-notifications",
@@ -36,12 +35,10 @@
         {
           "photosPermission": "YOUvolution uses your photos to log meals."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
-    "extra": {
-      "router": {
-        "origin": false
-      }
-    }
+    "extra": {}
   }
 }

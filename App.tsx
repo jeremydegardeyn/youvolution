@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { View, StyleSheet, StatusBar } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -15,6 +15,7 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import CoachScreen from './src/screens/CoachScreen';
 import ProgressScreen from './src/screens/ProgressScreen';
+import WeeklyPlanScreen from './src/screens/WeeklyPlanScreen';
 import { UserProfile } from './src/types';
 
 const Tab = createBottomTabNavigator();
@@ -22,6 +23,7 @@ const Tab = createBottomTabNavigator();
 export default function App() {
   const { user, loading: authLoading } = useAuth();
   const { profile, loading: profileLoading, updateProfile, refetch } = useProfile(user?.id);
+  const navRef = useRef<NavigationContainerRef<any>>(null);
 
   if (authLoading || (user && profileLoading)) {
     return <View style={styles.splash} />;
@@ -63,13 +65,14 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar barStyle="dark-content" />
-        <NavigationContainer>
+        <NavigationContainer ref={navRef}>
           <Tab.Navigator
             screenOptions={({ route }) => ({
               tabBarIcon: ({ focused, color, size }) => {
                 const icons: Record<string, string> = {
                   Home: focused ? 'home' : 'home-outline',
                   Coach: focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline',
+                  Plan: focused ? 'calendar' : 'calendar-outline',
                   Progress: focused ? 'trending-up' : 'trending-up-outline',
                 };
                 return <Ionicons name={icons[route.name] as any} size={size} color={color} />;
@@ -89,10 +92,13 @@ export default function App() {
             })}
           >
             <Tab.Screen name="Home" options={{ title: 'Today' }}>
-              {() => <HomeScreen profile={profile!} onChatPress={() => {}} />}
+              {() => <HomeScreen profile={profile!} onChatPress={() => navRef.current?.navigate('Coach')} />}
             </Tab.Screen>
             <Tab.Screen name="Coach" options={{ title: 'Coach' }}>
               {() => <CoachScreen profile={profile!} />}
+            </Tab.Screen>
+            <Tab.Screen name="Plan" options={{ title: 'My Plan' }}>
+              {() => <WeeklyPlanScreen profile={profile!} onChatPress={() => navRef.current?.navigate('Coach')} />}
             </Tab.Screen>
             <Tab.Screen name="Progress" options={{ title: 'Progress' }}>
               {() => <ProgressScreen profile={profile!} onProfileUpdate={refetch} />}

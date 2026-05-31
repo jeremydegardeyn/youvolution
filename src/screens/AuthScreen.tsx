@@ -22,7 +22,7 @@ export default function AuthScreen() {
   const [mode, setMode] = useState<'landing' | 'email'>('landing');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(true);
   const [loading, setLoading] = useState(false);
 
   const redirectUri = makeRedirectUri({ scheme: 'youvolution' });
@@ -123,8 +123,12 @@ export default function AuthScreen() {
           <View style={styles.dividerLine} />
         </View>
 
-        <TouchableOpacity style={styles.emailBtn} onPress={() => setMode('email')}>
-          <Text style={styles.emailBtnText}>Continue with Email</Text>
+        <TouchableOpacity style={styles.emailBtn} onPress={() => { setIsSignUp(true); setMode('email'); }}>
+          <Text style={styles.emailBtnText}>Sign Up with Email</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => { setIsSignUp(false); setMode('email'); }}>
+          <Text style={styles.signInText}>Already have an account? Sign in</Text>
         </TouchableOpacity>
 
         <Text style={styles.disclaimer}>
@@ -199,6 +203,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emailBtnText: { color: Colors.white, fontSize: FontSizes.base, fontWeight: '600' },
+  signInText: {
+    color: 'rgba(255,255,255,0.75)',
+    textAlign: 'center',
+    fontSize: FontSizes.sm,
+    marginTop: Spacing.xs,
+  },
   disclaimer: {
     color: 'rgba(255,255,255,0.5)',
     fontSize: FontSizes.xs,

@@ -1,22 +1,24 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
+  ScrollView,
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
-  Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, FontSizes, Spacing } from '../constants/colors';
 import { Message, UserProfile, MealLog } from '../types';
 import { supabase } from '../lib/supabase';
-import { chatWithCoach, estimateMeal, generateWeeklyPlan } from '../lib/ai';
+import { chatWithCoach, estimateMeal, generateWeeklyPlan, analyzeMealPhoto } from '../lib/ai';
+import * as FileSystem from 'expo-file-system';
+import { appEvents, PLAN_UPDATED, MEAL_LOGGED } from '../lib/events';
 import { format, startOfWeek } from 'date-fns';
 
 interface Props {
@@ -26,10 +28,10 @@ interface Props {
 const QUICK_PROMPTS = [
   '🍽️ Log a meal',
   '📋 Generate my weekly plan',
+  '🏋️ Generate a workout plan',
   '⚖️ Log my weight',
   '💬 How am I doing?',
   '🥗 Meal ideas for today',
-  '📞 Contact nutrition coach',
 ];
 
 export default function CoachScreen({ profile }: Props) {
@@ -84,8 +86,10 @@ export default function CoachScreen({ profile }: Props) {
       // Detect intent for special actions
       const lower = text.toLowerCase();
 
-      if (lower.includes('generate') && (lower.includes('plan') || lower.includes('week'))) {
-        reply = await handleGeneratePlan();
+      if (lower.includes('generate') && lower.includes('workout')) {
+        reply = await handleGeneratePlan(true);
+      } else if (lower.includes('generate') && (lower.includes('plan') || lower.includes('week'))) {
+        reply = await handleGeneratePlan(false);
       } else if (lower.includes('log') && lower.includes('weight')) {
         reply = "Sure! What's your current weight in lbs?";
       } else if (lower.includes('contact') && lower.includes('coach')) {
@@ -121,21 +125,27 @@ export default function CoachScreen({ profile }: Props) {
       setMessages(prev => [...prev, assistantMsg]);
       await saveMessage('assistant', reply);
     } catch (err) {
-      Alert.alert('Error', 'Could not reach the coach. Check your connection.');
+      console.error('sendMessage outer catch:', err);
+      Alert.alert('Error', `${err instanceof Error ? err.message : String(err)}`);
     }
 
     setLoading(false);
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
   };
 
-  const handleGeneratePlan = async (): Promise<string> => {
+  const handleGeneratePlan = async (workoutOnly = false): Promise<string> => {
     try {
       const raw = await generateWeeklyPlan(profile);
+      console.log('AI raw response:', raw);
       const cleaned = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
+      console.log('Cleaned JSON:', cleaned);
       const parsed = JSON.parse(cleaned);
+      console.log('Parsed plan:', JSON.stringify(parsed).slice(0, 200));
 
       const weekStart = format(startOfWeek(new Date()), 'yyyy-MM-dd');
-      await supabase.from('weekly_plans').upsert({
+      // Delete existing plan first so upsert always overwrites
+      await supabase.from('weekly_plans').delete().eq('user_id', profile.id).eq('week_start', weekStart);
+      await supabase.from('weekly_plans').insert({
         user_id: profile.id,
         week_start: weekStart,
         meal_plan: parsed.meal_plan,
@@ -145,9 +155,11 @@ export default function CoachScreen({ profile }: Props) {
         created_at: new Date().toISOString(),
       });
 
-      return `✅ Your weekly plan is ready and saved!\n\n${parsed.summary}\n\nHead to the Home tab to see today's meals and workout. I'll be here if you want to swap anything out!`;
-    } catch {
-      return "I had trouble generating your plan. Could you tell me a bit more about your food preferences or any schedule constraints this week?";
+      appEvents.emit(PLAN_UPDATED);
+      return `✅ Your weekly plan is ready! Check the Home tab — it's already updated with today's meals and workout. Let me know if you want to swap anything out!`;
+    } catch (err) {
+      console.error('Plan generation error:', err);
+      return `I had trouble generating your plan. Error: ${err instanceof Error ? err.message : String(err)}`;
     }
   };
 
@@ -166,6 +178,7 @@ export default function CoachScreen({ profile }: Props) {
       meal_type,
       logged_at: new Date().toISOString(),
     });
+    appEvents.emit(MEAL_LOGGED);
   };
 
   const logWeight = async (weight: number) => {
@@ -184,31 +197,75 @@ export default function CoachScreen({ profile }: Props) {
   };
 
   const handleImagePick = async () => {
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-    });
-    if (!result.canceled && result.assets[0]) {
-      await sendMessage("I took a photo of my meal — can you estimate the calories? [Photo meal log]");
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Camera access needed', 'Please allow camera access to log meals by photo.');
+      return;
     }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaType.Images,
+      quality: 0.6,
+      base64: false,
+    });
+
+    if (result.canceled || !result.assets[0]) return;
+
+    const uri = result.assets[0].uri;
+    setLoading(true);
+
+    // Show user message immediately
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      user_id: profile.id,
+      role: 'user',
+      content: '📷 [Photo of my meal]',
+      created_at: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, userMsg]);
+    await saveMessage('user', '📷 [Photo of my meal]');
+
+    try {
+      // Read as base64
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const analysis = await analyzeMealPhoto(base64);
+      await logMeal(analysis.description, analysis.calories, analysis.protein);
+
+      const clarNote = analysis.clarification ? `\n\n${analysis.clarification}` : '';
+      const reply = `📷 I can see **${analysis.description}**.\n\nI've logged it as approximately **${analysis.calories} calories** and **${analysis.protein}g protein**. ${clarNote}\n\nYour home screen totals are updated!`;
+
+      const assistantMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        user_id: profile.id,
+        role: 'assistant',
+        content: reply,
+        created_at: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+      await saveMessage('assistant', reply);
+    } catch (err) {
+      console.error('Photo analysis error:', err);
+      const errMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        user_id: profile.id,
+        role: 'assistant',
+        content: "I had trouble analyzing that photo. Could you describe your meal instead?",
+        created_at: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, errMsg]);
+      await saveMessage('assistant', errMsg.content);
+    }
+
+    setLoading(false);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
   };
 
-  const renderMessage = ({ item }: { item: Message }) => {
-    const isUser = item.role === 'user';
-    return (
-      <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
-        {!isUser && <View style={styles.avatar}><Text style={styles.avatarText}>Y</Text></View>}
-        <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
-            {item.content}
-          </Text>
-          <Text style={[styles.timestamp, isUser && { color: 'rgba(255,255,255,0.6)' }]}>
-            {format(new Date(item.created_at), 'h:mm a')}
-          </Text>
-        </View>
-      </View>
-    );
-  };
+  const renderMessage = useCallback(({ item }: { item: Message }) => (
+    <MessageBubble item={item} />
+  ), []);
 
   if (initialLoading) {
     return <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator color={Colors.primary} /></View>;
@@ -221,6 +278,9 @@ export default function CoachScreen({ profile }: Props) {
         data={messages}
         renderItem={renderMessage}
         keyExtractor={m => m.id}
+        removeClippedSubviews
+        maxToRenderPerBatch={10}
+        windowSize={5}
         contentContainerStyle={styles.messageList}
         ListHeaderComponent={
           messages.length === 0 ? (
@@ -245,23 +305,14 @@ export default function CoachScreen({ profile }: Props) {
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
       />
 
-      {/* Quick prompts */}
-      {messages.length === 0 && (
-        <View>
-          <FlatList
-            horizontal
-            data={QUICK_PROMPTS}
-            keyExtractor={i => i}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.quickPrompts}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.quickChip} onPress={() => sendMessage(item)}>
-                <Text style={styles.quickChipText}>{item}</Text>
-              </TouchableOpacity>
-            )}
-          />
-        </View>
-      )}
+      {/* Quick prompts — 2 row wrap */}
+      <View style={styles.quickPrompts}>
+        {QUICK_PROMPTS.map(prompt => (
+          <TouchableOpacity key={prompt} style={styles.quickChip} onPress={() => sendMessage(prompt)}>
+            <Text style={styles.quickChipText}>{prompt}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       <View style={styles.inputBar}>
         <TouchableOpacity style={styles.cameraBtn} onPress={handleImagePick}>
@@ -307,9 +358,9 @@ const styles = StyleSheet.create({
   emptyState: { padding: Spacing.lg, alignItems: 'center' },
   emptyTitle: { fontSize: FontSizes['2xl'], fontWeight: '700', color: Colors.text, marginBottom: Spacing.sm },
   emptySubtitle: { fontSize: FontSizes.base, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
-  quickPrompts: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, gap: Spacing.sm },
-  quickChip: { backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
-  quickChipText: { fontSize: FontSizes.sm, color: Colors.text, fontWeight: '500' },
+  quickPrompts: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, gap: Spacing.xs },
+  quickChip: { backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  quickChipText: { fontSize: FontSizes.xs, color: Colors.text, fontWeight: '500' },
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', padding: Spacing.sm, paddingBottom: Platform.OS === 'ios' ? Spacing.md : Spacing.sm, backgroundColor: Colors.surface, borderTopWidth: 1, borderTopColor: Colors.border, gap: Spacing.xs },
   cameraBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
   cameraBtnText: { fontSize: 22 },
@@ -317,4 +368,19 @@ const styles = StyleSheet.create({
   sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primary, justifyContent: 'center', alignItems: 'center' },
   sendBtnDisabled: { backgroundColor: Colors.border },
   sendBtnText: { color: Colors.white, fontSize: 18, fontWeight: '700' },
+});
+
+const MessageBubble = memo(({ item }: { item: Message }) => {
+  const isUser = item.role === 'user';
+  return (
+    <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
+      {!isUser && <View style={styles.avatar}><Text style={styles.avatarText}>Y</Text></View>}
+      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+        <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>{item.content}</Text>
+        <Text style={[styles.timestamp, isUser && { color: 'rgba(255,255,255,0.6)' }]}>
+          {format(new Date(item.created_at), 'h:mm a')}
+        </Text>
+      </View>
+    </View>
+  );
 });
